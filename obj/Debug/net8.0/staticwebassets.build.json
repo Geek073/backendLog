@@ -1,0 +1,12 @@
+{
+  "Version": 1,
+  "Hash": "u5wDDLM/heYqo9/nQhTILGvsW1AFf/LDQIglceLtcKE=",
+  "Source": "LogViewerApi",
+  "BasePath": "_content/LogViewerApi",
+  "Mode": "Default",
+  "ManifestType": "Build",
+  "ReferencedProjectsConfiguration": [],
+  "DiscoveryPatterns": [],
+  "Assets": [],
+  "Endpoints": []
+}
