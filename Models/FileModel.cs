@@ -74,4 +74,39 @@
     {
         public List<LiveLogItem> Items { get; set; } = new List<LiveLogItem>();
     }
+    public class ExtractionSession
+    {
+        public string SessionId { get; set; }
+        public string TempFolderPath { get; set; }
+        public string OriginalZipPath { get; set; }
+        public DateTime LastAccessTime { get; set; } = DateTime.Now;
+        public bool IsLiveLog { get; set; }
+        public LogsResponse LogsData { get; set; } = new LogsResponse();
+
+        // Update the last access time
+        public void UpdateAccessTime()
+        {
+            LastAccessTime = DateTime.Now;
+        }
+    }
+    public class DirectoryBrowseRequest
+    {
+        public string DirectoryPath { get; set; }
+    }
+
+    public class DirectoryContentsResponse
+    {
+        public string CurrentPath { get; set; }
+        public List<FileSystemItem> Items { get; set; } = new List<FileSystemItem>();
+    }
+
+    public class FileSystemItem
+    {
+        public string Name { get; set; }
+        public string Path { get; set; }
+        public string Type { get; set; } // "Directory" or "File"
+        public DateTime LastModified { get; set; }
+        public long Size { get; set; } // For files only
+        public bool IsZipFile { get; set; }
+    }
 }

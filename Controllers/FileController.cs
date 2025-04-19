@@ -4,6 +4,7 @@ using LogViewerApi.Services;
 
 namespace LogViewerApi.Controllers
 {
+    private readonly SessionManager _sessionManager;
     [ApiController]
     [Route("api/[controller]")]
     public class FileController : ControllerBase
@@ -14,6 +15,7 @@ namespace LogViewerApi.Controllers
         public FileController(FileService fileService, ILogger<FileController> logger)
         {
             _fileService = fileService;
+            _sessionManager = sessionManager;
             _logger = logger;
         }
 
@@ -118,6 +120,87 @@ namespace LogViewerApi.Controllers
             catch (Exception ex)
             {
                 _logger.LogError(ex, "Error during cleanup");
+                return StatusCode(500, "Internal server error");
+            }
+        }
+        [HttpGet("session/{sessionId}")]
+        public ActionResult<ExtractionSession> GetSession(string sessionId)
+        {
+            try
+            {
+                var session = _sessionManager.GetSession(sessionId);
+                if (session == null)
+                {
+                    return NotFound("Session not found");
+                }
+
+                // Update last access time
+                session.UpdateAccessTime();
+                return Ok(session);
+            }
+            catch (Exception ex)
+            {
+                _logger.LogError(ex, "Error retrieving session");
+                return StatusCode(500, "Internal server error");
+            }
+        }
+
+        [HttpGet("sessions")]
+        public ActionResult<List<string>> GetAllSessions()
+        {
+            try
+            {
+                var sessions = _sessionManager.GetAllSessionIds();
+                return Ok(sessions);
+            }
+            catch (Exception ex)
+            {
+                _logger.LogError(ex, "Error retrieving sessions");
+                return StatusCode(500, "Internal server error");
+            }
+        }
+
+        [HttpPost("browse")]
+        public ActionResult<DirectoryContentsResponse> BrowseDirectory([FromBody] DirectoryBrowseRequest request)
+        {
+            try
+            {
+                var response = _fileService.BrowseDirectory(request.DirectoryPath);
+                return Ok(response);
+            }
+            catch (Exception ex)
+            {
+                _logger.LogError(ex, "Error browsing directory");
+                return StatusCode(500, "Internal server error");
+            }
+        }
+
+        [HttpPost("extract-in-directory")]
+        public ActionResult<InitialExtractionResponse> ExtractZipInDirectory([FromBody] ZipExtractionRequest request)
+        {
+            try
+            {
+                var response = _fileService.ExtractZipInDirectory(request.ZipFilePath);
+                return Ok(response);
+            }
+            catch (Exception ex)
+            {
+                _logger.LogError(ex, "Error extracting zip in directory");
+                return StatusCode(500, "Internal server error");
+            }
+        }
+
+        [HttpGet("livelogs/directory")]
+        public ActionResult<LiveLogResponse> GetLiveLogDirectoryContents([FromQuery] string path = null)
+        {
+            try
+            {
+                var response = _fileService.GetLiveLogDirectoryContents(path);
+                return Ok(response);
+            }
+            catch (Exception ex)
+            {
+                _logger.LogError(ex, "Error retrieving live log directory contents");
                 return StatusCode(500, "Internal server error");
             }
         }

@@ -8,6 +8,7 @@ namespace LogViewerApi.Services
 {
     public class FileService
     {
+        private readonly SessionManager _sessionManager;
         private readonly string _databasePath = @"C:\Savelog\Database\";
         private readonly string _tempPath = @"C:\Savelog\Database\Temp\";
         private readonly ILogger<FileService> _logger;
@@ -15,9 +16,10 @@ namespace LogViewerApi.Services
         // HashSet to track processed files to avoid duplicates
         private readonly ConcurrentDictionary<string, HashSet<string>> _processedFiles = new ConcurrentDictionary<string, HashSet<string>>();
 
-        public FileService(ILogger<FileService> logger)
+        public FileService(ILogger<FileService> logger, SessionManager sessionManager)
         {
             _logger = logger;
+            _sessionManager = sessionManager;
 
             // Ensure temp directory exists
             if (!Directory.Exists(_tempPath))
@@ -101,6 +103,21 @@ namespace LogViewerApi.Services
                 response.ProcessLogs = FindProcessLogs(tempFolderPath, sessionId);
                 response.SessionId = sessionId;
                 response.InitialProgress = 100;
+
+                // Save session information
+                var session = new ExtractionSession
+                {
+                    SessionId = sessionId,
+                    TempFolderPath = tempFolderPath,
+                    OriginalZipPath = zipFilePath,
+                    IsLiveLog = false,
+                    LogsData = new LogsResponse
+                    {
+                        CentralLogs = response.CentralLogs,
+                        ProcessLogs = response.ProcessLogs
+                    }
+                };
+                _sessionManager.SaveSession(sessionId, session);
 
                 // Start background extraction of nested zip files
                 StartNestedExtractionAsync(zipFilePath, tempFolderPath, sessionId);
@@ -246,7 +263,24 @@ namespace LogViewerApi.Services
                     IsComplete = progress.IsComplete,
                     NewLogs = newLogs
                 };
-
+                // Update session with new logs if session exists
+                var session = _sessionManager.GetSession(sessionId);
+                if (session != null && newLogs.Count > 0)
+                {
+                    foreach (var log in newLogs)
+                    {
+                        if (log.Type == "central")
+                        {
+                            session.LogsData.CentralLogs.Add(log);
+                        }
+                        else if (log.Type == "process")
+                        {
+                            session.LogsData.ProcessLogs.Add(log);
+                        }
+                    }
+                    session.UpdateAccessTime();
+                    _sessionManager.SaveSession(sessionId, session);
+                }
                 return response;
             }
 
@@ -453,7 +487,16 @@ namespace LogViewerApi.Services
             }
 
             // Reuse the existing extraction logic
-            return ExtractInitialZip(zipFilePath);
+            var response = ExtractInitialZip(zipFilePath);
+            // Update session to mark as live log
+            var session = _sessionManager.GetSession(response.SessionId);
+            if (session != null)
+            {
+                session.IsLiveLog = true;
+                _sessionManager.SaveSession(session.SessionId, session);
+            }
+
+            return response;
         }
 
         public void CleanupTempFiles()
@@ -485,11 +528,162 @@ namespace LogViewerApi.Services
                     _progressTrackers.TryRemove(key, out _);
                     _processedFiles.TryRemove(key, out _);
                 }
+                // Clean up old sessions
+                _sessionManager.CleanupOldSessions();
             }
             catch (Exception ex)
             {
                 _logger.LogError(ex, "Error cleaning up temp files");
             }
+        }
+        // Add these methods to the FileService class
+        public DirectoryContentsResponse BrowseDirectory(string directoryPath)
+        {
+            var response = new DirectoryContentsResponse();
+            response.CurrentPath = directoryPath;
+
+            try
+            {
+                if (!Directory.Exists(directoryPath))
+                {
+                    _logger.LogWarning($"Directory does not exist: {directoryPath}");
+                    return response;
+                }
+
+                // Get directories
+                var directories = new DirectoryInfo(directoryPath).GetDirectories();
+                foreach (var dir in directories)
+                {
+                    response.Items.Add(new FileSystemItem
+                    {
+                        Name = dir.Name,
+                        Path = dir.FullName,
+                        Type = "Directory",
+                        LastModified = dir.LastWriteTime,
+                        Size = 0
+                    });
+                }
+
+                // Get files
+                var files = new DirectoryInfo(directoryPath).GetFiles();
+                foreach (var file in files)
+                {
+                    bool isZip = file.Extension.Equals(".zip", StringComparison.OrdinalIgnoreCase);
+                    response.Items.Add(new FileSystemItem
+                    {
+                        Name = file.Name,
+                        Path = file.FullName,
+                        Type = "File",
+                        LastModified = file.LastWriteTime,
+                        Size = file.Length,
+                        IsZipFile = isZip
+                    });
+                }
+            }
+            catch (Exception ex)
+            {
+                _logger.LogError(ex, $"Error browsing directory: {directoryPath}");
+            }
+
+            return response;
+        }
+
+        // Add this method to extract a zip file within a directory
+        public InitialExtractionResponse ExtractZipInDirectory(string zipFilePath, string parentSessionId = null)
+        {
+            // Logic similar to ExtractInitialZip but for nested directories
+            var response = new InitialExtractionResponse();
+            var sessionId = parentSessionId ?? Guid.NewGuid().ToString();
+            var extractPath = Path.Combine(
+                Path.GetDirectoryName(zipFilePath),
+                Path.GetFileNameWithoutExtension(zipFilePath)
+            );
+
+            try
+            {
+                // Create directory if it doesn't exist
+                if (!Directory.Exists(extractPath))
+                {
+                    Directory.CreateDirectory(extractPath);
+                }
+
+                // Extract the zip
+                ZipFile.ExtractToDirectory(zipFilePath, extractPath, true);
+
+                // Find initial log files
+                response.CentralLogs = FindCentralLogs(extractPath, sessionId);
+                response.ProcessLogs = FindProcessLogs(extractPath, sessionId);
+                response.SessionId = sessionId;
+                response.InitialProgress = 100;
+
+                // Start background extraction of nested zip files
+                StartNestedExtractionAsync(zipFilePath, extractPath, sessionId);
+
+                return response;
+            }
+            catch (Exception ex)
+            {
+                _logger.LogError(ex, $"Error extracting zip file in directory: {zipFilePath}");
+                return response;
+            }
+        }
+
+        // Add this method to retrieve directory contents for Live Logs
+        public LiveLogResponse GetLiveLogDirectoryContents(string directoryPath = null)
+        {
+            var response = new LiveLogResponse();
+            string basePath = @"C:\store\logs";
+            string targetPath = directoryPath ?? basePath;
+
+            try
+            {
+                // Validate path is within the permitted directory
+                if (!targetPath.StartsWith(basePath, StringComparison.OrdinalIgnoreCase))
+                {
+                    _logger.LogWarning($"Attempted to access directory outside of live logs: {targetPath}");
+                    return response;
+                }
+
+                if (!Directory.Exists(targetPath))
+                {
+                    _logger.LogWarning($"Directory does not exist: {targetPath}");
+                    return response;
+                }
+
+                // Get directories
+                var directories = new DirectoryInfo(targetPath).GetDirectories();
+                foreach (var dir in directories)
+                {
+                    response.Items.Add(new LiveLogItem
+                    {
+                        Name = dir.Name,
+                        Path = dir.FullName,
+                        IsDirectory = true,
+                        LastModified = dir.LastWriteTime,
+                        Size = 0
+                    });
+                }
+
+                // Get files
+                var files = new DirectoryInfo(targetPath).GetFiles();
+                foreach (var file in files)
+                {
+                    response.Items.Add(new LiveLogItem
+                    {
+                        Name = file.Name,
+                        Path = file.FullName,
+                        IsDirectory = false,
+                        LastModified = file.LastWriteTime,
+                        Size = file.Length
+                    });
+                }
+            }
+            catch (Exception ex)
+            {
+                _logger.LogError(ex, $"Error retrieving live log directory contents from {targetPath}");
+            }
+
+            return response;
         }
     }
 }

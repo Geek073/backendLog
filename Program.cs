@@ -6,6 +6,8 @@ var builder = WebApplication.CreateBuilder(args);
 builder.Services.AddControllers();
 builder.Services.AddEndpointsApiExplorer();
 builder.Services.AddSwaggerGen();
+// Add this to your dependency injection configuration
+builder.Services.AddSingleton<SessionManager>();
 
 // Register the FileService
 builder.Services.AddSingleton<FileService>();
